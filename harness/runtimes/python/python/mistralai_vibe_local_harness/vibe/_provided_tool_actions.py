@@ -22,6 +22,21 @@ from mistralai_vibe_local_harness.vibe._mcp_models import MCPNormalizedResult
 
 _CONTENT_BLOCKS = TypeAdapter(list[RustContentBlock])
 
+_ERROR_TEXT_LIMIT = 2_000
+
+
+def _first_error_text(blocks: list[RustContentBlock]) -> str | None:
+    """First non-empty text block of an ``isError`` result, stripped and capped."""
+    for block in blocks:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            trimmed = text.strip()
+            if trimmed:
+                if len(trimmed) > _ERROR_TEXT_LIMIT:
+                    return trimmed[:_ERROR_TEXT_LIMIT] + "… [truncated]"
+                return trimmed
+    return None
+
 
 type ProvidedToolCall = Callable[
     [str, str, dict[str, JsonValue]],
@@ -61,7 +76,13 @@ async def execute_provided_tool_action(
                 _meta=result.meta,
                 error=RustProtocolError(
                     code=tool_error_code,
-                    message=tool_error_message,
+                    # The server's own error text (first non-empty text
+                    # block) instead of a generic placeholder: MCP servers
+                    # put actionable detail - schema complaints, attention
+                    # pointers, retry hints - in the isError content blocks.
+                    # tool_error_message remains the fallback when no text
+                    # block carries any.
+                    message=_first_error_text(content) or tool_error_message,
                     retryable=False,
                     details=None,
                 ),
